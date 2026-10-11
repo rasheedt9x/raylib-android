@@ -1,0 +1,3 @@
+# downloaded/generated on first build (kit.sh fetchsdk/prepare); debug.keystore is the signing key: never commit it
+sdk/
+__pycache__/
