@@ -87,3 +87,8 @@ build wouldn't. See `kit/net.h`.
   fields restarts the game.
 - One shared debug signing key in `sdk/debug.keystore` (created on first build). Back it up: updates must be signed
   with the same key.
+
+## Roadmap
+
+- **Leaderboard example**: a template showing how to submit and fetch scores with `kit/net.h`. You bring the
+  backend; the kit stays backend-agnostic.
