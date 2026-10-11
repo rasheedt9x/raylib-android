@@ -19,7 +19,10 @@ Builds raylib games into Android APKs entirely in Termux: no Gradle, no Java, no
   the state block, so it survives hot reloads. Globals/statics in game code reset on every reload.
 - kit/host.c: main(). Release: game code linked in. Dev (-DGAME_HOT): host + raylib only, game code dlopen'd.
   Also mutes audio on APP_CMD_LOST_FOCUS (raylib 5.5's Android backend has its music pause commented out, and
-  with the loop blocked the stream buffer repeats).
+  with the loop blocked the stream buffer repeats). Mute/unmute is guarded against repeated LOST_FOCUS and logged
+  ("HOST: focus ..."). Open issue 2026-10-11: the user heard no sound once after Pop was brought back from a few
+  minutes in the background (via `am start`); not reproduced (shade + app switch restores 1.00 every time), logs
+  were already gone. If it recurs: check the HOST lines and logcat for AAudio disconnects.
 - kit/dev.py: the dev server (watch src/ + assets/, rebuild via `kit.sh code`, serve on 127.0.0.1:DEV_PORT).
 - tools/icon.c -> sdk/bin/icon (built against Termux's desktop raylib, Image API only, no window): adaptive icon
   mipmaps (108dp foreground, black background) and the placeholder generator.

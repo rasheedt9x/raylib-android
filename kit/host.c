@@ -16,12 +16,24 @@ struct android_app *GetAndroidApp(void);  // (raylib's)
 // raylib keeps the audio device running when the app goes to the background (its Pause/ResumeMusicStream calls
 // are commented out), and with the game loop blocked the music buffer repeats: mute while unfocused.
 static void (*raylibOnAppCmd)(struct android_app *, int32_t);
+// Android can send LOST_FOCUS twice in a row (notification shade, then another app): only the first one saves the
+// volume, or the second would save the muted 0 and "restore" silence.
 static float volume = 1;
+static bool muted;
 static void onAppCmd(struct android_app *app, int32_t cmd)
 {
     raylibOnAppCmd(app, cmd);
-    if (cmd == APP_CMD_LOST_FOCUS) { volume = GetMasterVolume(); SetMasterVolume(0); }
-    if (cmd == APP_CMD_GAINED_FOCUS) SetMasterVolume(volume);
+    if (cmd == APP_CMD_LOST_FOCUS && !muted) {
+        volume = GetMasterVolume();
+        SetMasterVolume(0);
+        muted = true;
+        TraceLog(LOG_INFO, "HOST: focus lost, audio muted (volume was %.2f)", volume);
+    } else if (cmd == APP_CMD_GAINED_FOCUS && muted) {
+        SetMasterVolume(volume);
+        muted = false;
+        TraceLog(LOG_INFO, "HOST: focus back, volume %.2f", volume);
+    } else if (cmd == APP_CMD_LOST_FOCUS || cmd == APP_CMD_GAINED_FOCUS)
+        TraceLog(LOG_INFO, "HOST: focus %s again (ignored)", cmd == APP_CMD_LOST_FOCUS ? "lost" : "gained");
 }
 
 static void start(void)
