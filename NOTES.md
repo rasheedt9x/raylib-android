@@ -37,6 +37,21 @@ Builds raylib games into Android APKs entirely in Termux: no Gradle, no Java, no
 - .so stored uncompressed, `zipalign -P 16`, -z max-page-size=16384 (extractNativeLibs=false).
 - aapt v1 (aapt2 broken in Termux), -0 arsc. Version code = minutes since 2026-01-01.
 
+## Networking (kit/net.h, kit/net.c)
+- Part of the host, not the game code: NetRequest memory and the worker thread survive hot reloads. One worker
+  thread, FIFO queue; NetFree on a pending request marks it abandoned and the worker frees it (both under qLock).
+- HTTP/1.0 + Connection: close, so responses aren't chunked (dechunk is there anyway); redirects up to 5
+  (303, and 301/302 after POST, become GET). Own connect with poll timeout (10 s) + SO_RCVTIMEO/SNDTIMEO 20 s.
+- HTTPS: mbedTLS 3.6.x LTS (sdk/mbedtls-<ver>, built in parallel into sdk/mbedtls-obj/libmbedtls.a, default
+  config, TLS 1.2 + 1.3, psa_crypto_init needed for 1.3). CA store: /apex/com.android.conscrypt/cacerts (updatable,
+  Android 14+), else /system/etc/security/cacerts, parsed once. Verify REQUIRED + hostname (SNI).
+- game.conf NETWORK=yes: release links real net.c + mbedTLS and adds INTERNET. Otherwise release compiles net.c with
+  -DKIT_NO_NETWORK (stubs that fail with a hint, no mbedTLS in the APK). Dev always has the real one (INTERNET is
+  there for the dev server) and logs a warning when NETWORK isn't yes.
+- Verified 2026-10-11 on the phone (dev, via a hot-loaded test in Pop): https GET 200, http GET 200,
+  http->https redirect 200, JSON POST echoed, expired.badssl.com rejected ("validity has expired"). Release with
+  NETWORK=yes: INTERNET in the APK, HTTPS GET 200 (temporary app, uninstalled after).
+
 ## Hot reload
 - Dev APK: lib/libgame.so (host, SONAME libgame.so, exports all raylib) + lib/libgamecode.so (fallback code).
   No assets in it: raylib's android_fopen falls back to <internalDataPath>/<path> when a file isn't in the APK,

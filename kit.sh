@@ -12,10 +12,12 @@ set -euo pipefail
 KIT=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 SDK=$KIT/sdk
 RAYLIB=$SDK/raylib-5.5/src
+MBEDTLS_VER=3.6.7
+MBEDTLS=$SDK/mbedtls-$MBEDTLS_VER
 API=30
 CC="clang --target=aarch64-linux-android$API"
 CFLAGS="-O2 -fPIC -ffunction-sections -fdata-sections -DPLATFORM_ANDROID -DGRAPHICS_API_OPENGL_ES2 \
-    -I$SDK -I$SDK/include -I$RAYLIB -I$KIT/kit"
+    -I$SDK -I$SDK/include -I$RAYLIB -I$MBEDTLS/include -I$KIT/kit"
 SYSLIBS="-L$SDK/syslibs -lEGL -lGLESv2 -landroid -llog -lOpenSLES -lm -ldl"
 LDFLAGS="-Wl,--gc-sections -Wl,--no-undefined -Wl,-z,max-page-size=16384 -Wl,--build-id"
 RISH=${RISH:-$HOME/rish/rish}
@@ -26,7 +28,7 @@ die() { echo "kit: $*" >&2; exit 1; }
 loadgame() {
     GAME=$(cd "$1" 2>/dev/null && pwd) || die "no such dir: $1"
     [ -f "$GAME/game.conf" ] || die "$GAME has no game.conf"
-    NAME= LABEL= PACKAGE= ORIENTATION=portrait DEV_PORT=47123
+    NAME= LABEL= PACKAGE= ORIENTATION=portrait DEV_PORT=47123 NETWORK=no
     # shellcheck disable=SC1091
     . "$GAME/game.conf"
     [ -n "$NAME" ] && [ -n "$PACKAGE" ] || die "game.conf needs NAME and PACKAGE"
@@ -54,6 +56,14 @@ fetchsdk() {
         fetch "$glue/android_native_app_glue.$f?format=TEXT" "$SDK/glue.b64"
         base64 -d "$SDK/glue.b64" > "$SDK/android_native_app_glue.$f" && rm "$SDK/glue.b64"
     done
+    # mbedTLS (LTS) for HTTPS in kit/net.c, checked against the release's sha256 file
+    if [ ! -d "$MBEDTLS" ]; then
+        local rel=https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-$MBEDTLS_VER
+        fetch "$rel/mbedtls-$MBEDTLS_VER.tar.bz2" "$SDK/mbedtls-$MBEDTLS_VER.tar.bz2"
+        fetch "$rel/mbedtls-$MBEDTLS_VER-sha256sum.txt" "$SDK/mbedtls.sha256"
+        (cd "$SDK" && grep 'tar.bz2' mbedtls.sha256 | sha256sum -c --quiet -) || die "mbedTLS checksum mismatch"
+        tar xjf "$SDK/mbedtls-$MBEDTLS_VER.tar.bz2" -C "$SDK" && rm "$SDK/mbedtls-$MBEDTLS_VER.tar.bz2" "$SDK/mbedtls.sha256"
+    fi
     # Khronos EGL/GLES2 headers: Termux's ndk-sysroot has none
     local egl=https://raw.githubusercontent.com/KhronosGroup/EGL-Registry/main/api
     local gl=https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/api
@@ -80,6 +90,15 @@ prepare() {
         $CC $CFLAGS -w -c "$SDK/android_native_app_glue.c" -o "$SDK/obj/android_native_app_glue.o"
         llvm-ar rcs "$SDK/obj/libraylib.a" "$SDK"/obj/*.o
     fi
+    if [ ! -f "$SDK/mbedtls-obj/libmbedtls.a" ]; then
+        echo "mbedTLS (once, about a minute)"
+        mkdir -p "$SDK/mbedtls-obj"
+        # shellcheck disable=SC2016
+        find "$MBEDTLS/library" -name '*.c' | xargs -P "$(nproc)" -I{} sh -c \
+            '$0 -O2 -fPIC -ffunction-sections -fdata-sections -w -I"$1/include" -I"$1/library" -c {} -o "$2/$(basename {} .c).o"' \
+            "$CC" "$MBEDTLS" "$SDK/mbedtls-obj"
+        llvm-ar rcs "$SDK/mbedtls-obj/libmbedtls.a" "$SDK"/mbedtls-obj/*.o
+    fi
     if [ ! -x "$SDK/bin/icon" ] || [ "$KIT/tools/icon.c" -nt "$SDK/bin/icon" ]; then
         mkdir -p "$SDK/bin"
         clang -O2 -o "$SDK/bin/icon" "$KIT/tools/icon.c" -lraylib -lm
@@ -104,6 +123,7 @@ buildcode() {  # <out.so>
 
 manifest() {  # <mode> <out>
     local perms="" label=$LABEL icon=""
+    [ "$NETWORK" = yes ] && perms='<uses-permission android:name="android.permission.INTERNET" />'
     if [ "$1" = dev ]; then
         perms='<uses-permission android:name="android.permission.INTERNET" />'  # the dev server (127.0.0.1)
         label="$LABEL (dev)"
@@ -139,13 +159,21 @@ package() {  # <mode: release|dev> <out.apk>
     rm -rf "$B/apk" "$B/res" && mkdir -p "$B/apk/lib/arm64-v8a"
     local lib=$B/apk/lib/arm64-v8a
     # shellcheck disable=SC2086
+    # kit/net.c: real (with mbedTLS) when the game has NETWORK=yes, stubs that explain otherwise. Dev builds always
+    # have it (they need INTERNET for the dev server anyway) but warn when release builds won't.
+    local net=(-DKIT_NO_NETWORK) tls=()
+    if [ "$NETWORK" = yes ] || [ "$mode" = dev ]; then
+        net=() tls=("$SDK/mbedtls-obj/libmbedtls.a")
+        [ "$NETWORK" = yes ] || net=(-DKIT_NETWORK_DEV_ONLY)
+    fi
     if [ "$mode" = release ]; then
-        $CC $CFLAGS $GAMEFLAGS -shared -o "$lib/libgame.so" "$KIT/kit/host.c" $SRCS \
-            -Wl,--whole-archive "$SDK/obj/libraylib.a" -Wl,--no-whole-archive $SYSLIBS $LDFLAGS -s
+        $CC $CFLAGS $GAMEFLAGS "${net[@]}" -shared -o "$lib/libgame.so" "$KIT/kit/host.c" "$KIT/kit/net.c" $SRCS \
+            -Wl,--whole-archive "$SDK/obj/libraylib.a" -Wl,--no-whole-archive "${tls[@]}" $SYSLIBS $LDFLAGS -s
     else
-        # the host exports all of raylib (whole-archive) for the game code .so to use
-        $CC $CFLAGS $GAMEFLAGS -DGAME_HOT -DDEV_PORT="$DEV_PORT" -shared -Wl,-soname,libgame.so -o "$lib/libgame.so" \
-            "$KIT/kit/host.c" -Wl,--whole-archive "$SDK/obj/libraylib.a" -Wl,--no-whole-archive $SYSLIBS $LDFLAGS
+        # the host exports all of raylib (whole-archive) and kit/net.h for the game code .so to use
+        $CC $CFLAGS $GAMEFLAGS "${net[@]}" -DGAME_HOT -DDEV_PORT="$DEV_PORT" -shared -Wl,-soname,libgame.so \
+            -o "$lib/libgame.so" "$KIT/kit/host.c" "$KIT/kit/net.c" \
+            -Wl,--whole-archive "$SDK/obj/libraylib.a" -Wl,--no-whole-archive "${tls[@]}" $SYSLIBS $LDFLAGS
     fi
     norpath "$lib/libgame.so"
     [ "$mode" = dev ] && buildcode "$lib/libgamecode.so"  # fallback for when the dev server isn't running

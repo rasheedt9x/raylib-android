@@ -8,6 +8,8 @@ Make Android games in C with [raylib](https://www.raylib.com), entirely on your 
   its state kept. Changed images and sounds reload too.
 - **Logs and crashes in your terminal**: `printf`, `TraceLog` and native crashes (with `file:line` backtraces)
   show up in Termux. No adb, no Shizuku, no Wi-Fi.
+- **HTTP and HTTPS that don't freeze the game**: `NetGet`/`NetPost` run in the background, with mbedTLS and the
+  phone's own trusted certificates.
 - **Real APKs**: release builds are normal signed APKs with your icon and assets.
 
 Example game: [pop](https://github.com/rasheedt9x/pop).
@@ -21,8 +23,8 @@ pkg install clang aapt apksigner patchelf python openjdk-21 raylib curl
 git clone https://github.com/rasheedt9x/raylib-android
 ```
 
-The first build downloads raylib 5.5, the NDK's `native_app_glue` and the Khronos GLES/EGL headers into `sdk/`,
-then compiles raylib once (about a minute). Termux's `raylib` package is only used by the icon tool.
+The first build downloads raylib 5.5, mbedTLS 3.6 (checksum-verified), the NDK's `native_app_glue` and the Khronos
+GLES/EGL headers into `sdk/`, then compiles them once (about a minute). Termux's `raylib` package is only used by the icon tool.
 
 ## Use
 
@@ -42,10 +44,28 @@ A game folder:
 
 | | |
 |---|---|
-| `game.conf` | name, label, package id, orientation, dev server port |
+| `game.conf` | name, label, package id, orientation, dev server port, `NETWORK=yes` for internet access |
 | `src/*.c` | your code; it defines one `GAME_API(...)` (see `kit/game.h`) |
 | `assets/` | images, sounds, fonts... loaded by relative path: `LoadTexture("images/player.png")` |
 | `icon.png` | square, full-bleed; keep the subject in the middle ~60% (launchers crop the edges) |
+
+## Network requests
+
+```c
+NetRequest *r = NetGet("https://api.example.com/scores");   // returns right away
+// later, each frame:
+if (r && NetDone(r)) {
+    if (NetStatus(r) == 200) parse(NetBody(r, NULL));
+    else TraceLog(LOG_WARNING, "failed: %s", NetError(r));
+    NetFree(r);
+    r = NULL;
+}
+```
+
+There's also `NetPost(url, contentType, body, len)` and `NetSend(method, url, headers, body, len)`. Requests run
+one at a time on a background thread, follow redirects and time out after about 20 seconds. Release APKs need
+`NETWORK=yes` in `game.conf`. Dev builds always have internet access, and they warn in the log when a release
+build wouldn't. See `kit/net.h`.
 
 ## How it works
 

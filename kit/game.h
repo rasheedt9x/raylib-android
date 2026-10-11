@@ -7,6 +7,7 @@
 #define GAME_H
 
 #include "raylib.h"
+#include "net.h"  // NetGet/NetPost: HTTP(S) without blocking the game
 #include <stdbool.h>
 
 typedef struct GameApi {
