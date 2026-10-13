@@ -84,3 +84,13 @@ Builds raylib games into Android APKs entirely in Termux: no Gradle, no Java, no
   path traversal blocked). Verified on the phone the same day with Pop: dev APK syncs code + 9 assets, music
   plays, and a code edit mid-game reloaded in ~1.3 s with the score/orbs kept (screenshots via rish screencap).
 - The original single-file Pop (no kit) was verified by the user on the phone the same day.
+
+## rlgl gotchas (learned on ../flip, 2026-10-13)
+- Textured triangles: draw them as RL_QUADS with the last vertex repeated (what raylib's own shapes do).
+  rlBegin(RL_TRIANGLES) after a quads draw resets the texture to white; rlSetTexture after it starts a new draw whose
+  mode is still RL_QUADS, so the triangles get indexed as quads (half of them vanish in a checker pattern).
+- raylib enables back-face culling: mirrored geometry needs rlDrawRenderBatchActive() + rlDisableBackfaceCulling().
+- GLES2 batch = 2048 quads (8192 vertices). Big meshes: own batch (rlLoadRenderBatch + rlSetRenderBatchActive).
+- Drawing with alpha into a RenderTexture lowers its alpha (it shows through later): rlColorMask(1,1,1,0) while
+  drawing, flush before restoring the mask.
+- game.conf LIBS="jnigraphics" links extra /system/lib64 libs; PERMS="MANAGE_EXTERNAL_STORAGE" adds permissions.

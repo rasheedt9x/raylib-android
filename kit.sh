@@ -28,12 +28,15 @@ die() { echo "kit: $*" >&2; exit 1; }
 loadgame() {
     GAME=$(cd "$1" 2>/dev/null && pwd) || die "no such dir: $1"
     [ -f "$GAME/game.conf" ] || die "$GAME has no game.conf"
-    NAME= LABEL= PACKAGE= ORIENTATION=portrait DEV_PORT=47123 NETWORK=no
+    NAME= LABEL= PACKAGE= ORIENTATION=portrait DEV_PORT=47123 NETWORK=no LIBS= PERMS=
     # shellcheck disable=SC1091
     . "$GAME/game.conf"
     [ -n "$NAME" ] && [ -n "$PACKAGE" ] || die "game.conf needs NAME and PACKAGE"
     LABEL=${LABEL:-$NAME}
     SRCS=$(find "$GAME/src" -name '*.c' | sort)
+    # extra phone libs from /system/lib64 (e.g. LIBS="jnigraphics"), linked like EGL/GLESv2
+    GAMELIBS=""
+    for l in $LIBS; do ln -sf "/system/lib64/lib$l.so" "$SDK/syslibs/lib$l.so"; GAMELIBS="$GAMELIBS -l$l"; done
     [ -n "$SRCS" ] || die "no .c files in $GAME/src"
 }
 
@@ -116,7 +119,7 @@ buildcode() {  # <out.so>
     [ -f "$host" ] || die "no dev host yet: run ./dev.sh once"
     # shellcheck disable=SC2086
     # not stripped, with debug info and frame pointers: dev.py turns crash backtraces into file:line
-    $CC $CFLAGS $GAMEFLAGS -g -fno-omit-frame-pointer -shared -o "$1.tmp" $SRCS "$host" -lm $LDFLAGS
+    $CC $CFLAGS $GAMEFLAGS -g -fno-omit-frame-pointer -shared -o "$1.tmp" $SRCS "$host" -L"$SDK/syslibs" $GAMELIBS -lm $LDFLAGS
     norpath "$1.tmp"
     mv "$1.tmp" "$1"
 }
@@ -128,6 +131,8 @@ manifest() {  # <mode> <out>
         perms='<uses-permission android:name="android.permission.INTERNET" />'  # the dev server (127.0.0.1)
         label="$LABEL (dev)"
     fi
+    local p  # game.conf PERMS="MANAGE_EXTERNAL_STORAGE ...": extra android.permission.* lines
+    for p in $PERMS; do perms="$perms <uses-permission android:name=\"android.permission.$p\" />"; done
     [ -f "$GAME/icon.png" ] && icon='android:icon="@mipmap/ic_launcher"'
     cat > "$2" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
@@ -168,12 +173,12 @@ package() {  # <mode: release|dev> <out.apk>
     fi
     if [ "$mode" = release ]; then
         $CC $CFLAGS $GAMEFLAGS "${net[@]}" -shared -o "$lib/libgame.so" "$KIT/kit/host.c" "$KIT/kit/net.c" $SRCS \
-            -Wl,--whole-archive "$SDK/obj/libraylib.a" -Wl,--no-whole-archive "${tls[@]}" $SYSLIBS $LDFLAGS -s
+            -Wl,--whole-archive "$SDK/obj/libraylib.a" -Wl,--no-whole-archive "${tls[@]}" $SYSLIBS $GAMELIBS $LDFLAGS -s
     else
         # the host exports all of raylib (whole-archive) and kit/net.h for the game code .so to use
         $CC $CFLAGS $GAMEFLAGS "${net[@]}" -DGAME_HOT -DDEV_PORT="$DEV_PORT" -shared -Wl,-soname,libgame.so \
             -o "$lib/libgame.so" "$KIT/kit/host.c" "$KIT/kit/net.c" \
-            -Wl,--whole-archive "$SDK/obj/libraylib.a" -Wl,--no-whole-archive "${tls[@]}" $SYSLIBS $LDFLAGS
+            -Wl,--whole-archive "$SDK/obj/libraylib.a" -Wl,--no-whole-archive "${tls[@]}" $SYSLIBS $GAMELIBS $LDFLAGS
     fi
     norpath "$lib/libgame.so"
     [ "$mode" = dev ] && buildcode "$lib/libgamecode.so"  # fallback for when the dev server isn't running
